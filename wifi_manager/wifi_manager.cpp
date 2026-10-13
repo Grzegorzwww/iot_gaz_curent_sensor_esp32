@@ -40,8 +40,9 @@ static void event_handler(void *, esp_event_base_t base, int32_t id, void *data)
             }
             else
             {
-                ++s_retry;
-                ESP_LOGW(TAG, "Disconnected, retrying (%d)", s_retry);
+                s_retry = s_retry + 1;
+                ESP_LOGW(TAG, "Disconnected, reason %d, retrying (%d)",
+                         static_cast<wifi_event_sta_disconnected_t *>(data)->reason, (int)s_retry);
                 esp_wifi_connect();
             }
             break;
@@ -96,6 +97,32 @@ void wifi_manager_stop(void)
     esp_wifi_stop();
 }
 
+// Diagnostyka: wypisuje sieci widoczne dla urzadzenia (SSID w cudzyslowach pokazuje spacje na koncu).
+static void log_visible_networks()
+{
+    wifi_scan_config_t scan = {};
+    scan.show_hidden = true;
+    if (esp_wifi_scan_start(&scan, true) != ESP_OK)
+    {
+        ESP_LOGW(TAG, "Scan failed");
+        return;
+    }
+
+    uint16_t count = 0;
+    esp_wifi_scan_get_ap_num(&count);
+    uint16_t n = count > 20 ? 20 : count;
+    wifi_ap_record_t records[20];
+    if (esp_wifi_scan_get_ap_records(&n, records) != ESP_OK)
+        return;
+
+    ESP_LOGI(TAG, "Scan: %u networks visible (2.4 GHz only)", (unsigned)count);
+    for (uint16_t i = 0; i < n; ++i)
+    {
+        ESP_LOGI(TAG, "  '%s' ch%d rssi %d auth %d", reinterpret_cast<const char *>(records[i].ssid),
+                 records[i].primary, records[i].rssi, (int)records[i].authmode);
+    }
+}
+
 bool wifi_manager_connect_sta(const char *ssid, const char *pass, int timeout_ms)
 {
     if (!wifi_init_once())
@@ -130,6 +157,8 @@ bool wifi_manager_connect_sta(const char *ssid, const char *pass, int timeout_ms
         return true;
 
     ESP_LOGE(TAG, "Connection to '%s' failed", ssid);
+    s_sta_wanted = false; // nie pozwol zdarzeniom rozlaczenia wznawiac laczenia w trakcie skanu
+    log_visible_networks();
     wifi_manager_stop();
     return false;
 }
