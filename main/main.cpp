@@ -35,8 +35,8 @@ static constexpr gpio_num_t CONFIG_GPIO = GPIO_NUM_8;
 
 static constexpr int WIFI_CONNECT_TIMEOUT_MS = 20000;
 static constexpr int64_t WIFI_RETRY_S = 30;         // przerwa miedzy nieudanymi probami polaczenia
-static constexpr int64_t REPORT_PERIOD_S = 30;      // co ile publikujemy dane
-static constexpr int64_t FLUSH_PERIOD_S = 60;       // co ile zapisujemy licznik w NVS
+static constexpr int64_t REPORT_PERIOD_S = 15;      // co ile publikujemy dane
+static constexpr int64_t FLUSH_PERIOD_S = 300;       // co ile zapisujemy licznik w NVS
 static constexpr int64_t OFFLINE_RESTART_S = 15 * 60;
 
 // Ustawiane, gdy przyszla komenda "set" - raport od razu.
