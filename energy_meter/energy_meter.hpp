@@ -38,9 +38,6 @@ public:
     static constexpr gpio_num_t PULSE_GPIO = GPIO_NUM_3;
     static constexpr int ACTIVE_LEVEL = 0; // poziom na pinie, gdy dioda licznika swieci
 
-    // TEST: loguje kazde zbocze i co 5 s surowy poziom na pinie (do strojenia fototranzystora).
-    static constexpr bool LOG_EDGES = true;
-
     static EnergyMeter &instance();
 
     // 1234567 impulsow przy 1000 imp/kWh -> "1234.567"

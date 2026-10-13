@@ -17,7 +17,7 @@
 static const char *TAG = "ENERGY";
 
 // Filtr blyskow diody licznika.
-static constexpr int64_t MIN_WIDTH_US = 5000;          // najdluzszy ciagly odcinek swiecenia krotszy = zaklocenie
+static constexpr int64_t MIN_WIDTH_US = 10000;          // najdluzszy ciagly odcinek swiecenia krotszy = zaklocenie
 static constexpr int64_t MAX_WIDTH_US = 2000000;       // dluzsze = swiatlo stale / zle ustawiony czujnik
 static constexpr int64_t MIN_INTERVAL_US = 40000;      // 36 kW przy 1000 imp/kWh - szybciej nie ma sensu
 static constexpr int64_t GAP_US = 5000;                // przerwy w swieceniu krotsze niz to = drgania na zboczu, scalane w jeden blysk
@@ -165,13 +165,13 @@ void EnergyMeter::count_pulse(int64_t on_us, int64_t width_us)
 
     if (interval > 0)
     {
-        ESP_LOGI(TAG, "Pulse! total=%lu (%s kWh), width %lld ms, interval %.2f s, power %.0f W", (unsigned long)total,
+        ESP_LOGD(TAG, "Pulse! total=%lu (%s kWh), width %lld ms, interval %.2f s, power %.0f W", (unsigned long)total,
                  format_kwh(total, imp_per_kwh_).c_str(), (long long)(width_us / 1000), interval / 1e6,
                  3.6e12 / ((double)imp_per_kwh_ * (double)interval));
     }
     else
     {
-        ESP_LOGI(TAG, "Pulse! total=%lu (%s kWh), width %lld ms", (unsigned long)total,
+        ESP_LOGD(TAG, "Pulse! total=%lu (%s kWh), width %lld ms", (unsigned long)total,
                  format_kwh(total, imp_per_kwh_).c_str(), (long long)(width_us / 1000));
     }
 }
@@ -193,26 +193,16 @@ void EnergyMeter::task()
     int64_t cand_last_off_us = 0;   // koniec ostatniego odcinka swiecenia
     int64_t best_run_us = 0;        // najdluzszy ciagly odcinek swiecenia w blysku
     int64_t best_run_start_us = 0;
-    int64_t span_start_us = 0;
-    int edges = 0;
     int64_t last_accepted_on_us = 0;
 
     auto finalize = [&]()
     {
-        const int64_t span = cand_last_off_us - span_start_us;
         const bool too_short = best_run_us < MIN_WIDTH_US;
         const bool too_long = best_run_us > MAX_WIDTH_US;
         const bool too_soon = last_accepted_on_us != 0 && best_run_start_us - last_accepted_on_us < MIN_INTERVAL_US;
         const bool accepted = !too_short && !too_long && !too_soon;
 
-        if (LOG_EDGES)
-        {
-            ESP_LOGI(TAG, "Flash: lit %lld us, span %lld us, %d edges -> %s", (long long)best_run_us, (long long)span,
-                     edges, accepted ? "ACCEPTED" : (too_short ? "rejected (too short)" : too_long ? "rejected (too long)" : "rejected (too soon)"));
-        }
-
         cand = false;
-        edges = 0;
         best_run_us = 0;
         if (!accepted)
         {
@@ -236,9 +226,7 @@ void EnergyMeter::task()
             if (!cand)
             {
                 cand = true;
-                span_start_us = t_us;
                 best_run_us = 0;
-                edges = 0;
             }
             cur_on_us = t_us;
         }
@@ -252,7 +240,6 @@ void EnergyMeter::task()
             }
             cand_last_off_us = t_us;
         }
-        ++edges;
     };
 
     for (;;)
@@ -268,12 +255,6 @@ void EnergyMeter::task()
             // Cisza na pinie: synchronizujemy stan z rzeczywistym poziomem (gdyby zdarzenie zginelo).
             const bool raw = gpio_get_level(PULSE_GPIO) == ACTIVE_LEVEL;
             handle_edge(esp_timer_get_time(), raw);
-
-            if (!cand && LOG_EDGES)
-            {
-                ESP_LOGI(TAG, "Raw level: %d (%s), pulses %lu, rejected %lu", gpio_get_level(PULSE_GPIO),
-                         raw ? "LIGHT" : "dark", (unsigned long)pulses_.load(), (unsigned long)rejected_.load());
-            }
         }
 
         // Blysk jest gotowy, gdy swiatlo zgaslo i przez GAP_US nie bylo nowego zbocza.
