@@ -19,4 +19,5 @@ idf_component_register(
         esp_driver_gpio esp_timer hal soc
     EMBED_TXTFILES
         "${PROJECT_ROOT}/certyficate/isrgrootx1.pem"
+        "${PROJECT_ROOT}/config_portal/jsQR.min.js"
 )

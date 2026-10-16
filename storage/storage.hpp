@@ -20,8 +20,8 @@ public:
     esp_err_t save_wifi_settings(const std::string &ssid, const std::string &pass);
     esp_err_t read_wifi_settings(std::string &ssid, std::string &pass);
 
-    esp_err_t save_id(const std::string &id);
-    esp_err_t read_id(std::string &id);
+    esp_err_t save_token(const std::string &token);
+    esp_err_t read_token(std::string &token);
 
     esp_err_t save_mqtt(const std::string &broker);
     esp_err_t read_mqtt(std::string &broker);

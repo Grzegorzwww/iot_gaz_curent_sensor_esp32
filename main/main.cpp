@@ -168,6 +168,8 @@ static void run_online(const DeviceConfig &cfg)
 
     if (cfg.wifi_ssid.empty())
         ESP_LOGW(TAG, "Brak SSID WiFi - tylko liczenie impulsow. Ustaw WiFi w trybie konfiguracji (zwarcie D8-GND przy starcie)");
+    if (cfg.main_topic.empty())
+        ESP_LOGW(TAG, "Brak tokenu urzadzenia - dane nie beda publikowane. Zeskanuj/wklej token z api.warcgr.pl w trybie konfiguracji");
 
     for (;;)
     {
@@ -189,7 +191,7 @@ static void run_online(const DeviceConfig &cfg)
                 last_report = now;
             }
         }
-        else if (!cfg.wifi_ssid.empty())
+        else if (!cfg.wifi_ssid.empty() && !cfg.main_topic.empty())
         {
             // WiFi laczy sie ponownie samo; tutaj tylko pierwsze polaczenie po starcie.
             if (!mqtt && now >= next_wifi_try)

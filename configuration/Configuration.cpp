@@ -1,4 +1,5 @@
 #include "configuration/Configuration.hpp"
+#include <cctype>
 #include <cstdlib>
 #include "storage/storage.hpp"
 
@@ -10,7 +11,8 @@ DeviceConfig Configuration::defaults()
     cfg.mqtt_broker = config_defaults::MQTT_BROKER;
     cfg.mqtt_login = config_defaults::MQTT_LOGIN;
     cfg.mqtt_pass = config_defaults::MQTT_PASS;
-    cfg.main_topic = config_defaults::MAIN_TOPIC;
+    cfg.token = config_defaults::TOKEN;
+    cfg.main_topic = build_topic(cfg.token);
     cfg.imp_per_kwh = config_defaults::IMP_PER_KWH;
     cfg.energy_price = config_defaults::ENERGY_PRICE;
     return cfg;
@@ -24,7 +26,8 @@ DeviceConfig Configuration::stored()
     storage->read_mqtt(cfg.mqtt_broker);
     storage->read_login(cfg.mqtt_login);
     storage->read_pass(cfg.mqtt_pass);
-    storage->read_id(cfg.main_topic);
+    storage->read_token(cfg.token);
+    cfg.main_topic = build_topic(cfg.token);
     storage->read_imp_per_kwh(cfg.imp_per_kwh);
     storage->read_price(cfg.energy_price);
     return cfg;
@@ -47,8 +50,9 @@ DeviceConfig Configuration::load()
         cfg.mqtt_login = def.mqtt_login;
     if (cfg.mqtt_pass.empty())
         cfg.mqtt_pass = def.mqtt_pass;
-    if (cfg.main_topic.empty())
-        cfg.main_topic = def.main_topic;
+    if (cfg.token.empty())
+        cfg.token = def.token;
+    cfg.main_topic = build_topic(cfg.token);
     if (cfg.imp_per_kwh.empty())
         cfg.imp_per_kwh = def.imp_per_kwh;
     if (cfg.energy_price.empty())
@@ -63,7 +67,7 @@ esp_err_t Configuration::save(const DeviceConfig &cfg)
         storage->save_mqtt(cfg.mqtt_broker) == ESP_OK &&
         storage->save_login(cfg.mqtt_login) == ESP_OK &&
         storage->save_pass(cfg.mqtt_pass) == ESP_OK &&
-        storage->save_id(cfg.main_topic) == ESP_OK &&
+        storage->save_token(cfg.token) == ESP_OK &&
         storage->save_imp_per_kwh(cfg.imp_per_kwh) == ESP_OK &&
         storage->save_price(cfg.energy_price) == ESP_OK)
     {
@@ -109,4 +113,23 @@ uint32_t Configuration::imp_per_kwh(const DeviceConfig &cfg)
     if (!parse_imp_per_kwh(cfg.imp_per_kwh, imp))
         parse_imp_per_kwh(config_defaults::IMP_PER_KWH, imp);
     return imp;
+}
+
+bool Configuration::valid_token(const std::string &token)
+{
+    if (token.size() < 6 || token.size() > 64)
+        return false;
+    for (char c : token)
+    {
+        if (!isalnum((unsigned char)c) && c != '_' && c != '-')
+            return false;
+    }
+    return true;
+}
+
+std::string Configuration::build_topic(const std::string &token)
+{
+    if (token.empty())
+        return "";
+    return token + config_defaults::TOPIC_SUFFIX;
 }

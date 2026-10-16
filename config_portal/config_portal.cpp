@@ -11,13 +11,18 @@
 #include <cstdlib>
 #include <map>
 #include <string>
+#include <vector>
 
 static const char *TAG = "CONFIG_PORTAL";
+
+// Osadzone przez EMBED_TXTFILES (main/CMakeLists.txt); TXT => konczy sie '\0'.
+extern const uint8_t jsqr_js_start[] asm("_binary_jsQR_min_js_start");
 
 static const size_t MAX_BODY = 1024;
 static const size_t MAX_SSID = 32;
 static const size_t MAX_WIFI_PASS = 63;
 static const size_t MAX_FIELD = 127;
+static const size_t MAX_TOKEN = 64;
 static const int CLIENT_GRACE_S = 10;
 
 static volatile bool settings_saved = false;
@@ -92,6 +97,19 @@ static std::string input_field(const char *label, const char *name, const std::s
            "\" placeholder=\"" + html_escape(placeholder) + "\" autocomplete=\"off\"></label>";
 }
 
+// Prosty escaping do osadzenia tekstu w literale JSON (cudzyslow i backslash).
+static std::string json_escape(const std::string &in)
+{
+    std::string out;
+    for (char c : in)
+    {
+        if (c == '"' || c == '\\')
+            out += '\\';
+        out += c;
+    }
+    return out;
+}
+
 static std::string build_page(const std::string &message)
 {
     const DeviceConfig def = Configuration::defaults();
@@ -101,22 +119,54 @@ static std::string build_page(const std::string &message)
         "<!DOCTYPE html><html lang=\"pl\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
         "<title>Konfiguracja</title><style>"
-        "body{font-family:sans-serif;max-width:420px;margin:1em auto;padding:0 1em}"
-        "label{display:block;margin-top:.8em;font-weight:bold}"
-        "input{width:100%;padding:.5em;box-sizing:border-box}"
-        "button{margin-top:1.2em;padding:.7em 1.2em}small{color:#555}"
-        "</style></head><body><h2>Konfiguracja urz\xc4\x85" "dzenia</h2>";
+        ":root{--accent:#2563eb;--accent-dark:#1d4ed8;--bg:#eef2f7;--card:#fff;--text:#1e293b;--muted:#64748b;--border:#dbe3ec}"
+        "*{box-sizing:border-box}"
+        "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;"
+        "background:var(--bg);color:var(--text);margin:0;padding:2em 1em}"
+        ".card{max-width:440px;margin:0 auto;background:var(--card);border-radius:16px;"
+        "box-shadow:0 4px 20px rgba(15,23,42,.08);padding:1.6em 1.6em 1.8em}"
+        "h2{margin:0 0 .15em;font-size:1.35em}"
+        "p.sub{margin:0 0 1.2em;color:var(--muted);font-size:.9em}"
+        "label{display:block;margin-top:1.1em;font-weight:600;font-size:.78em;color:var(--muted);"
+        "text-transform:uppercase;letter-spacing:.04em}"
+        "input{width:100%;padding:.6em .7em;margin-top:.35em;border:1px solid var(--border);"
+        "border-radius:9px;font-size:1em;background:#fff;color:var(--text);font-family:inherit}"
+        "input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.15)}"
+        "button{margin-top:1.2em;padding:.7em 1.2em;border:none;border-radius:9px;font-size:.95em;"
+        "font-weight:600;cursor:pointer;background:var(--accent);color:#fff;transition:background .15s}"
+        "button:hover{background:var(--accent-dark)}"
+        "button.secondary{background:#e7edf5;color:var(--text)}"
+        "button.secondary:hover{background:#d7e0ec}"
+        "small{display:block;margin-top:.5em;color:var(--muted);font-size:.82em}"
+        "#qr_status,#wifi_status{font-weight:500}"
+        "hr{border:none;border-top:1px solid var(--border);margin:1.6em 0}"
+        "</style></head><body><div class=\"card\">"
+        "<h2>Konfiguracja urz\xc4\x85" "dzenia</h2>"
+        "<p class=\"sub\">Ustawienia WiFi, MQTT i licznika energii</p>";
 
     if (!message.empty())
         page += "<p><b>" + html_escape(message) + "</b></p>";
 
     page += "<form method=\"post\" action=\"/save\">";
-    page += input_field("WiFi SSID", "ssid", cur.wifi_ssid, def.wifi_ssid, MAX_SSID, false);
+    page += "<label>WiFi SSID<input list=\"ssid_list\" id=\"ssid\" name=\"ssid\" type=\"text\" maxlength=\"" +
+            std::to_string(MAX_SSID) + "\" value=\"" + html_escape(cur.wifi_ssid) + "\" placeholder=\"" +
+            html_escape(def.wifi_ssid) + "\" autocomplete=\"off\"></label>"
+            "<datalist id=\"ssid_list\"></datalist>"
+            "<button type=\"button\" class=\"secondary\" onclick=\"scanWifi()\">Skanuj sieci</button>"
+            "<small id=\"wifi_status\"></small>";
     page += input_field("WiFi has\xc5\x82o", "wpass", "", "(bez zmian)", MAX_WIFI_PASS, true);
     page += input_field("MQTT broker (URI)", "broker", cur.mqtt_broker, def.mqtt_broker, MAX_FIELD, false);
-    page += input_field("MQTT login", "login", cur.mqtt_login, def.mqtt_login, MAX_FIELD, false);
-    page += input_field("MQTT has\xc5\x82o", "mpass", "", "(bez zmian)", MAX_FIELD, true);
-    page += input_field("MAIN TOPIC", "topic", cur.main_topic, def.main_topic, MAX_FIELD, false);
+
+    // Token urzadzenia z api.warcgr.pl (konto uzytkownika -> token -> to ESP). Mozna wkleic recznie
+    // albo zeskanowac zdjecie kodu QR z panelu (dekodowanie dziala w przegladarce, bez dostepu do internetu).
+    page += "<label>Token urz\xc4\x85" "dzenia (z panelu api.warcgr.pl)"
+            "<input id=\"token\" name=\"token\" type=\"text\" maxlength=\"" + std::to_string(MAX_TOKEN) +
+            "\" value=\"" + html_escape(cur.token) + "\" placeholder=\"wklej token lub zeskanuj QR\" "
+            "autocomplete=\"off\"></label>";
+    page += "<input type=\"file\" accept=\"image/*\" capture=\"environment\" id=\"qr_file\" style=\"display:none\">"
+            "<button type=\"button\" onclick=\"document.getElementById('qr_file').click()\">"
+            "\xf0\x9f\x93\xb7 Zeskanuj token (zdj\xc4\x99" "cie kodu QR)</button>"
+            "<small id=\"qr_status\"></small>";
 
     // Stan licznika energii [kWh] - przepisz z wyswietlacza. Ukryte pole "meter_orig" pozwala wykryc, czy uzytkownik
     // faktycznie cos zmienil (dzieki temu impuls, ktory nadszedl w trakcie edycji, nie jest gubiony).
@@ -128,8 +178,50 @@ static std::string build_page(const std::string &message)
     page += input_field("Cena za 1 kWh [z\xc5\x82]", "price", cur.energy_price, "np. 1,10 (puste = bez koszt\xc3\xb3w)", 8, false);
     page += "<p><small>Puste pole = warto\xc5\x9b\xc4\x87 domy\xc5\x9blna (widoczna jako podpowied\xc5\xba).</small></p>"
             "<button type=\"submit\" name=\"action\" value=\"save\">Ustaw</button> "
-            "<button type=\"submit\" name=\"action\" value=\"reset\">Przywr\xc3\xb3" "\xc4\x87 domy\xc5\x9blne</button>"
-            "</form></body></html>";
+            "<button type=\"submit\" name=\"action\" value=\"reset\" class=\"secondary\">Przywr\xc3\xb3" "\xc4\x87 domy\xc5\x9blne</button>"
+            "</form></div>"
+            "<script src=\"/jsqr.js\"></script>"
+            "<script>"
+            // Skanowanie QR z pliku/zdjecia dziala w pelni lokalnie (biblioteka jsQR osadzona w
+            // urzadzeniu), wiec dziala takze przez zwykle HTTP bez dostepu do internetu.
+            "document.getElementById('qr_file').addEventListener('change',function(e){"
+            "var st=document.getElementById('qr_status');var f=e.target.files[0];if(!f)return;"
+            "st.textContent='Skanowanie...';"
+            "var reader=new FileReader();"
+            "reader.onload=function(ev){"
+            "var img=new Image();"
+            "img.onload=function(){"
+            "var maxDim=1000;"
+            "var scale=Math.min(1,maxDim/Math.max(img.width,img.height));"
+            "var w=Math.max(1,Math.round(img.width*scale));"
+            "var h=Math.max(1,Math.round(img.height*scale));"
+            "var canvas=document.createElement('canvas');"
+            "canvas.width=w;canvas.height=h;"
+            "var ctx=canvas.getContext('2d');"
+            "ctx.drawImage(img,0,0,w,h);"
+            "var data=ctx.getImageData(0,0,w,h);"
+            "var code=null;"
+            "try{code=jsQR(data.data,w,h);}catch(err){st.textContent='Blad dekodowania: '+err.message;return;}"
+            "if(code&&code.data){document.getElementById('token').value=code.data;st.textContent='Zeskanowano.';}"
+            "else{st.textContent='Nie znaleziono kodu QR. Sprobuj z blizszej odleglosci, przy lepszym swietle.';}"
+            "};"
+            "img.src=ev.target.result;"
+            "};"
+            "reader.readAsDataURL(f);"
+            "});"
+            "function scanWifi(){"
+            "var st=document.getElementById('wifi_status');"
+            "st.textContent='Skanowanie sieci...';"
+            "fetch('/wifi_scan').then(function(r){return r.json();}).then(function(list){"
+            "var dl=document.getElementById('ssid_list');"
+            "dl.innerHTML='';"
+            "list.forEach(function(ssid){var o=document.createElement('option');o.value=ssid;dl.appendChild(o);});"
+            "st.textContent=list.length?('Znaleziono '+list.length+' sieci.'):'Brak wynikow w poblizu.';"
+            "}).catch(function(){st.textContent='Blad skanowania sieci.';});"
+            "}"
+            "window.addEventListener('load',scanWifi);"
+            "</script>"
+            "</body></html>";
     return page;
 }
 
@@ -142,6 +234,30 @@ static esp_err_t send_html(httpd_req_t *req, const std::string &html)
 static esp_err_t root_get_handler(httpd_req_t *req)
 {
     return send_html(req, build_page(""));
+}
+
+static esp_err_t jsqr_get_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/javascript");
+    httpd_resp_set_hdr(req, "Cache-Control", "max-age=3600");
+    return httpd_resp_send(req, reinterpret_cast<const char *>(jsqr_js_start), HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t wifi_scan_get_handler(httpd_req_t *req)
+{
+    const std::vector<std::string> networks = wifi_manager_scan_networks();
+    std::string json = "[";
+    for (size_t i = 0; i < networks.size(); ++i)
+    {
+        if (i)
+            json += ',';
+        json += '"';
+        json += json_escape(networks[i]);
+        json += '"';
+    }
+    json += ']';
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, json.c_str(), HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t save_post_handler(httpd_req_t *req)
@@ -177,25 +293,35 @@ static esp_err_t save_post_handler(httpd_req_t *req)
         const std::string old_ssid = cfg.wifi_ssid;
         cfg.wifi_ssid = form["ssid"];
         cfg.mqtt_broker = form["broker"];
-        cfg.mqtt_login = form["login"];
-        cfg.main_topic = form["topic"];
+        cfg.token = form["token"];
+        // Usun biale znaki na brzegach (wklejanie ze schowka / skan QR czasem dokleja spacje/nowa linie).
+        while (!cfg.token.empty() && std::isspace((unsigned char)cfg.token.front()))
+            cfg.token.erase(cfg.token.begin());
+        while (!cfg.token.empty() && std::isspace((unsigned char)cfg.token.back()))
+            cfg.token.pop_back();
         cfg.imp_per_kwh = form["imp"];
         cfg.energy_price = form["price"];
 
         // Puste haslo = bez zmian (ale tylko gdy SSID sie nie zmienilo).
         if (!form["wpass"].empty() || cfg.wifi_ssid != old_ssid)
             cfg.wifi_pass = form["wpass"];
-        if (!form["mpass"].empty())
-            cfg.mqtt_pass = form["mpass"];
     }
 
     if (cfg.wifi_ssid.size() > MAX_SSID || cfg.wifi_pass.size() > MAX_WIFI_PASS ||
         cfg.mqtt_broker.size() > MAX_FIELD || cfg.mqtt_login.size() > MAX_FIELD ||
-        cfg.mqtt_pass.size() > MAX_FIELD || cfg.main_topic.size() > MAX_FIELD)
+        cfg.mqtt_pass.size() > MAX_FIELD || cfg.token.size() > MAX_TOKEN)
     {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Zbyt dlugie wartosci");
         return ESP_FAIL;
     }
+
+    if (!cfg.token.empty() && !Configuration::valid_token(cfg.token))
+    {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                             "Nieprawidlowy token (6-64 znaki: litery, cyfry, '_' lub '-')");
+        return ESP_FAIL;
+    }
+    cfg.main_topic = Configuration::build_topic(cfg.token);
 
     double price_check = 0.0;
     if (!cfg.energy_price.empty() && !Configuration::parse_price(cfg.energy_price, price_check))
@@ -271,6 +397,18 @@ void ConfigPortal::run(int timeout_s)
     root_uri.method = HTTP_GET;
     root_uri.handler = root_get_handler;
     httpd_register_uri_handler(server, &root_uri);
+
+    httpd_uri_t jsqr_uri = {};
+    jsqr_uri.uri = "/jsqr.js";
+    jsqr_uri.method = HTTP_GET;
+    jsqr_uri.handler = jsqr_get_handler;
+    httpd_register_uri_handler(server, &jsqr_uri);
+
+    httpd_uri_t wifi_scan_uri = {};
+    wifi_scan_uri.uri = "/wifi_scan";
+    wifi_scan_uri.method = HTTP_GET;
+    wifi_scan_uri.handler = wifi_scan_get_handler;
+    httpd_register_uri_handler(server, &wifi_scan_uri);
 
     httpd_uri_t save_uri = {};
     save_uri.uri = "/save";

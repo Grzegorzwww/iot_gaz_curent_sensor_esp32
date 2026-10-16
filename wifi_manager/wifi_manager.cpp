@@ -1,5 +1,6 @@
 #include "wifi_manager.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include "esp_event.h"
@@ -197,4 +198,67 @@ int wifi_manager_ap_clients(void)
     if (esp_wifi_ap_get_sta_list(&list) != ESP_OK)
         return 0;
     return list.num;
+}
+
+std::vector<std::string> wifi_manager_scan_networks()
+{
+    std::vector<std::string> result;
+    if (!wifi_init_once())
+        return result;
+
+    // Skan wymaga aktywnego interfejsu STA. W portalu konfiguracyjnym dzialamy w trybie AP,
+    // wiec na czas skanu przelaczamy sie na APSTA (polaczeni klienci AP nie sa rozlaczani),
+    // po czym wracamy do trybu AP.
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    esp_wifi_get_mode(&mode);
+    const bool was_ap_only = (mode == WIFI_MODE_AP);
+    if (was_ap_only)
+        esp_wifi_set_mode(WIFI_MODE_APSTA);
+
+    wifi_scan_config_t scan = {};
+    scan.show_hidden = false;
+    const esp_err_t err = esp_wifi_scan_start(&scan, true);
+
+    if (err == ESP_OK)
+    {
+        uint16_t count = 0;
+        esp_wifi_scan_get_ap_num(&count);
+        uint16_t n = count > 30 ? 30 : count;
+        if (n > 0)
+        {
+            std::vector<wifi_ap_record_t> records(n);
+            if (esp_wifi_scan_get_ap_records(&n, records.data()) == ESP_OK)
+            {
+                std::sort(records.begin(), records.begin() + n,
+                          [](const wifi_ap_record_t &a, const wifi_ap_record_t &b) { return a.rssi > b.rssi; });
+                for (uint16_t i = 0; i < n; ++i)
+                {
+                    const char *ssid = reinterpret_cast<const char *>(records[i].ssid);
+                    if (ssid[0] == '\0')
+                        continue;
+                    std::string name(ssid);
+                    bool dup = false;
+                    for (const auto &s : result)
+                    {
+                        if (s == name)
+                        {
+                            dup = true;
+                            break;
+                        }
+                    }
+                    if (!dup)
+                        result.push_back(name);
+                }
+            }
+        }
+    }
+    else
+    {
+        ESP_LOGW(TAG, "Scan failed: %s", esp_err_to_name(err));
+    }
+
+    if (was_ap_only)
+        esp_wifi_set_mode(WIFI_MODE_AP);
+
+    return result;
 }

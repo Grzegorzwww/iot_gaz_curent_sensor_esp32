@@ -23,7 +23,12 @@ namespace config_defaults
     inline constexpr const char *MQTT_BROKER = "wss://mqtt.warcgr.pl:443/mqtt";
     inline constexpr const char *MQTT_LOGIN = "bob";
     inline constexpr const char *MQTT_PASS = "Bobik111"; // uzupelnij haslo (albo wpisz na stronie konfiguracyjnej)
-    inline constexpr const char *MAIN_TOPIC = "wesola88/zurzycie_pradu";
+
+    // --- Token urzadzenia z api.warcgr.pl (konto uzytkownika -> token -> ESP, 1 konto moze miec wiele ESP). ---
+    // Brak domyslnego - urzadzenie bez tokenu nie publikuje danych (nie wiadomo, do kogo naleza).
+    inline constexpr const char *TOKEN = "";
+    // Temat MQTT = <token> + TOPIC_SUFFIX, np. "ab12cd34.../zurzycie_pradu".
+    inline constexpr const char *TOPIC_SUFFIX = "/zurzycie_pradu";
 
     // --- Licznik energii: impulsy diody na 1 kWh (typowo 1000, 2000, 10000) ---
     inline constexpr const char *IMP_PER_KWH = "1000";
@@ -44,7 +49,8 @@ struct DeviceConfig
     std::string mqtt_broker;
     std::string mqtt_login;
     std::string mqtt_pass;
-    std::string main_topic;
+    std::string token;      // identyfikator urzadzenia z api.warcgr.pl (losowy, nie e-mail)
+    std::string main_topic; // wyliczane z token: token + "/zurzycie_pradu" (puste, gdy token pusty)
     std::string imp_per_kwh;  // impulsow na kWh, np. "1000"
     std::string energy_price; // cena 1 kWh w zl, np. "1.10" lub "1,10"
 };
@@ -72,6 +78,12 @@ public:
 
     // Liczba impulsow na kWh z konfiguracji (przy bledzie/pustej: 1000).
     static uint32_t imp_per_kwh(const DeviceConfig &cfg);
+
+    // Czy token ma poprawny format (6-64 znakow: litery, cyfry, '_', '-'). Pusty = nieskonfigurowany (OK).
+    static bool valid_token(const std::string &token);
+
+    // Temat MQTT z tokenu: token + "/zurzycie_pradu". Pusty token -> pusty temat (nic nie publikujemy).
+    static std::string build_topic(const std::string &token);
 };
 
 #endif

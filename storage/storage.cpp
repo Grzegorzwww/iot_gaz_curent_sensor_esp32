@@ -10,7 +10,7 @@ static const char *KEY_WIFI_PASS = "wifi_pass";
 static const char *KEY_BROKER = "broker";
 static const char *KEY_LOGIN = "login";
 static const char *KEY_MQTT_PASS = "mqtt_pass";
-static const char *KEY_TOPIC = "topic";
+static const char *KEY_TOKEN = "token";
 static const char *KEY_PULSES = "pulses";
 static const char *KEY_PRICE = "price";
 static const char *KEY_IMP = "imp_kwh";
@@ -79,8 +79,8 @@ esp_err_t Storage::read_wifi_settings(std::string &ssid, std::string &pass)
     return e1 != ESP_OK ? e1 : e2;
 }
 
-esp_err_t Storage::save_id(const std::string &id) { return set_str(KEY_TOPIC, id); }
-esp_err_t Storage::read_id(std::string &id) { return get_str(KEY_TOPIC, id); }
+esp_err_t Storage::save_token(const std::string &token) { return set_str(KEY_TOKEN, token); }
+esp_err_t Storage::read_token(std::string &token) { return get_str(KEY_TOKEN, token); }
 
 esp_err_t Storage::save_mqtt(const std::string &broker) { return set_str(KEY_BROKER, broker); }
 esp_err_t Storage::read_mqtt(std::string &broker) { return get_str(KEY_BROKER, broker); }

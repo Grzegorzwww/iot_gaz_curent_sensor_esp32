@@ -22,6 +22,14 @@ void wifi_manager_stop(void);
 
 #ifdef __cplusplus
 }
+
+#include <string>
+#include <vector>
+
+// Zwraca liste unikalnych SSID widocznych w poblizu (WiFi 2.4GHz), posortowanych malejaco
+// wedlug sily sygnalu. Dziala rowniez w trakcie pracy w trybie AP (portal konfiguracyjny) -
+// na czas skanu urzadzenie chwilowo przelacza sie na tryb APSTA, po czym wraca do AP.
+std::vector<std::string> wifi_manager_scan_networks();
 #endif
 
 #endif
