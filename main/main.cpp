@@ -30,8 +30,16 @@
 
 static const char *TAG = "MAIN";
 
-// Zwarcie D8 (GPIO8) z GND przy starcie => tryb konfiguracji (siec AP + strona WWW).
+
+
+#ifdef ESP32_C3
+// XIAO ESP32-C3: D8 = GPIO10 --- IGNORE ---
+// Zwarcie D8 (GPIO19 na XIAO ESP32-C6!) z GND przy starcie => tryb konfiguracji (siec AP + strona WWW).
 static constexpr gpio_num_t CONFIG_GPIO = GPIO_NUM_8;
+#elif ESP32_C6
+// Zwarcie D8 (GPIO19 na XIAO ESP32-C6!) z GND przy starcie => tryb konfiguracji (siec AP + strona WWW).
+static constexpr gpio_num_t CONFIG_GPIO = GPIO_NUM_19;
+#endif
 
 static constexpr int WIFI_CONNECT_TIMEOUT_MS = 20000;
 static constexpr int64_t WIFI_RETRY_S = 30;         // przerwa miedzy nieudanymi probami polaczenia

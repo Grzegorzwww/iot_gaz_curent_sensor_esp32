@@ -7,6 +7,7 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "configuration/Configuration.hpp"
 
 /*
  * Licznik impulsow diody licznika energii (np. 1000 imp/kWh), odczytywanych fototranzystorem.
@@ -34,8 +35,14 @@
 class EnergyMeter
 {
 public:
-    // XIAO ESP32-C3: D1 = GPIO3
+    // XIAO ESP32-C6: D1 = GPIO1 (na XIAO ESP32-C3 bylo to GPIO3 - mapowanie D-pinow na GPIO rozni sie miedzy plytkami!)
+#ifdef ESP32_C3
     static constexpr gpio_num_t PULSE_GPIO = GPIO_NUM_3;
+#elif ESP32_C6
+    static constexpr gpio_num_t PULSE_GPIO = GPIO_NUM_1;
+#endif
+
+
     static constexpr int ACTIVE_LEVEL = 0; // poziom na pinie, gdy dioda licznika swieci
 
     static EnergyMeter &instance();

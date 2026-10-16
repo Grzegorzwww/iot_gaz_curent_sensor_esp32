@@ -10,6 +10,9 @@
  * Sa uzywane dopiero wtedy, gdy uzytkownik nie wpisal wlasnych wartosci
  * na stronie konfiguracyjnej (wartosci z pamieci NVS maja pierwszenstwo).
  */
+
+ #define ESP32_C6 1
+
 namespace config_defaults
 {
     // --- WiFi, z ktorym urzadzenie laczy sie na co dzien ---
