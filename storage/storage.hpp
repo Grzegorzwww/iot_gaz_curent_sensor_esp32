@@ -32,18 +32,6 @@ public:
     esp_err_t save_pass(const std::string &pass);
     esp_err_t read_pass(std::string &pass);
 
-    // Cena 1 kWh (tekst, np. "1.10").
-    esp_err_t save_price(const std::string &price);
-    esp_err_t read_price(std::string &price);
-
-    // Liczba impulsow diody licznika na 1 kWh (tekst, np. "1000").
-    esp_err_t save_imp_per_kwh(const std::string &imp);
-    esp_err_t read_imp_per_kwh(std::string &imp);
-
-    // Licznik impulsow diody (1 impuls = 1/imp_per_kwh kWh).
-    esp_err_t save_pulses(uint32_t pulses);
-    esp_err_t read_pulses(uint32_t &pulses);
-
 private:
     Storage();
 

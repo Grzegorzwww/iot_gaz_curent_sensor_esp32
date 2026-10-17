@@ -1,6 +1,5 @@
 #include "config_portal/config_portal.hpp"
 #include "configuration/Configuration.hpp"
-#include "energy_meter/energy_meter.hpp"
 #include "wifi_manager.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -142,7 +141,7 @@ static std::string build_page(const std::string &message)
         "hr{border:none;border-top:1px solid var(--border);margin:1.6em 0}"
         "</style></head><body><div class=\"card\">"
         "<h2>Konfiguracja urz\xc4\x85" "dzenia</h2>"
-        "<p class=\"sub\">Ustawienia WiFi, MQTT i licznika energii</p>";
+        "<p class=\"sub\">Ustawienia WiFi, MQTT i tokenu urz\xc4\x85" "dzenia</p>";
 
     if (!message.empty())
         page += "<p><b>" + html_escape(message) + "</b></p>";
@@ -168,15 +167,8 @@ static std::string build_page(const std::string &message)
             "\xf0\x9f\x93\xb7 Zeskanuj token (zdj\xc4\x99" "cie kodu QR)</button>"
             "<small id=\"qr_status\"></small>";
 
-    // Stan licznika energii [kWh] - przepisz z wyswietlacza. Ukryte pole "meter_orig" pozwala wykryc, czy uzytkownik
-    // faktycznie cos zmienil (dzieki temu impuls, ktory nadszedl w trakcie edycji, nie jest gubiony).
-    const std::string meter =
-        EnergyMeter::format_kwh(EnergyMeter::instance().pulses(), EnergyMeter::instance().imp_per_kwh());
-    page += input_field("Aktualny stan licznika energii [kWh] (z wy\xc5\x9bwietlacza)", "meter", meter, "np. 12345,678", 14, false);
-    page += "<input type=\"hidden\" name=\"meter_orig\" value=\"" + html_escape(meter) + "\">";
-    page += input_field("Impulsy diody na 1 kWh", "imp", cur.imp_per_kwh, def.imp_per_kwh, 6, false);
-    page += input_field("Cena za 1 kWh [z\xc5\x82]", "price", cur.energy_price, "np. 1,10 (puste = bez koszt\xc3\xb3w)", 8, false);
-    page += "<p><small>Puste pole = warto\xc5\x9b\xc4\x87 domy\xc5\x9blna (widoczna jako podpowied\xc5\xba).</small></p>"
+    page += "<p><small>Token wyznacza temat MQTT, na kt\xc3\xb3" "ry urz\xc4\x85" "dzenie publikuje odczyty "
+            "temperatury wody.</small></p>"
             "<button type=\"submit\" name=\"action\" value=\"save\">Ustaw</button> "
             "<button type=\"submit\" name=\"action\" value=\"reset\" class=\"secondary\">Przywr\xc3\xb3" "\xc4\x87 domy\xc5\x9blne</button>"
             "</form></div>"
@@ -299,8 +291,6 @@ static esp_err_t save_post_handler(httpd_req_t *req)
             cfg.token.erase(cfg.token.begin());
         while (!cfg.token.empty() && std::isspace((unsigned char)cfg.token.back()))
             cfg.token.pop_back();
-        cfg.imp_per_kwh = form["imp"];
-        cfg.energy_price = form["price"];
 
         // Puste haslo = bez zmian (ale tylko gdy SSID sie nie zmienilo).
         if (!form["wpass"].empty() || cfg.wifi_ssid != old_ssid)
@@ -323,50 +313,11 @@ static esp_err_t save_post_handler(httpd_req_t *req)
     }
     cfg.main_topic = Configuration::build_topic(cfg.token);
 
-    double price_check = 0.0;
-    if (!cfg.energy_price.empty() && !Configuration::parse_price(cfg.energy_price, price_check))
-    {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Nieprawidlowa cena energii (np. 1,10)");
-        return ESP_FAIL;
-    }
-
-    uint32_t imp_check = 0;
-    if (!cfg.imp_per_kwh.empty() && !Configuration::parse_imp_per_kwh(cfg.imp_per_kwh, imp_check))
-    {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Nieprawidlowa liczba impulsow na kWh (1-100000)");
-        return ESP_FAIL;
-    }
-
-    // Stan licznika [kWh] zostaje zachowany takze przy zmianie liczby impulsow na kWh
-    // (zapisane sa impulsy, wiec trzeba je przeliczyc na nowa stala).
-    const uint32_t old_imp = EnergyMeter::instance().imp_per_kwh();
-    const uint32_t new_imp = Configuration::imp_per_kwh(cfg);
-    const bool set_meter = action != "reset" && !form["meter"].empty() && form["meter"] != form["meter_orig"];
-    uint32_t new_pulses = 0;
-    if (set_meter)
-    {
-        if (!EnergyMeter::parse_kwh(form["meter"], new_imp, new_pulses))
-        {
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Nieprawidlowy stan licznika (np. 12345,678)");
-            return ESP_FAIL;
-        }
-    }
-    else if (new_imp != old_imp)
-    {
-        const double kwh = (double)EnergyMeter::instance().pulses() / (double)old_imp;
-        new_pulses = (uint32_t)(kwh * new_imp + 0.5);
-    }
-    const bool update_pulses = set_meter || new_imp != old_imp;
-
     if (Configuration::save(cfg) != ESP_OK)
     {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Blad zapisu");
         return ESP_FAIL;
     }
-
-    // Stan licznika: ustawiamy tylko gdy pole zostalo zmienione albo zmienila sie liczba impulsow na kWh.
-    if (update_pulses)
-        EnergyMeter::instance().set_pulses(new_pulses);
 
     ESP_LOGI(TAG, "Settings saved, restarting");
     esp_err_t res = send_html(req, "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
