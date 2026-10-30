@@ -36,6 +36,12 @@ namespace config_defaults
     // --- Cena 1 kWh [zl]. Puste = koszty nie sa publikowane. ---
     inline constexpr const char *ENERGY_PRICE = "";
 
+    // --- Zasilanie / strategia wysylania (wybierana w portalu) ---
+    // Sekundy: "0" = zasilanie sieciowe (domyslnie): WiFi i MQTT stale polaczone, raport co kilkanascie sekund.
+    // Inaczej bateria: ESP32-C6 spi w deep sleep, impulsy liczy rdzen LP, a co tyle sekund urzadzenie
+    //      budzi sie, laczy z WiFi/MQTT, wysyla raport i znow zasypia. Dozwolone: 60, 180, 300, 600, 3600.
+    inline constexpr const char *REPORT_PERIOD = "0";
+
     // --- Tryb konfiguracji (siec wystawiana przez urzadzenie po restarcie) ---
     inline constexpr const char *AP_SSID = "ESP32Config";
     inline constexpr const char *AP_PASS = "22446688"; // min. 8 znakow
@@ -53,6 +59,7 @@ struct DeviceConfig
     std::string main_topic; // wyliczane z token: token + "/zurzycie_pradu" (puste, gdy token pusty)
     std::string imp_per_kwh;  // impulsow na kWh, np. "1000"
     std::string energy_price; // cena 1 kWh w zl, np. "1.10" lub "1,10"
+    std::string report_period; // strategia wysylania w sekundach: "0" (siec), "60", "180", "300", "600", "3600"
 };
 
 class Configuration
@@ -78,6 +85,12 @@ public:
 
     // Liczba impulsow na kWh z konfiguracji (przy bledzie/pustej: 1000).
     static uint32_t imp_per_kwh(const DeviceConfig &cfg);
+
+    // Parsuje okres raportowania [s]: dozwolone 0 (zasilanie sieciowe), 60, 180, 300, 600, 3600.
+    static bool parse_report_period(const std::string &text, uint32_t &period_s);
+
+    // Okres raportowania z konfiguracji (przy bledzie/pustej: wartosc domyslna).
+    static uint32_t report_period_s(const DeviceConfig &cfg);
 
     // Czy token ma poprawny format (6-64 znakow: litery, cyfry, '_', '-'). Pusty = nieskonfigurowany (OK).
     static bool valid_token(const std::string &token);

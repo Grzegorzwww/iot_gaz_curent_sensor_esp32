@@ -8,13 +8,21 @@
  *         --> laczenie z WiFi + MQTT, raport co REPORT_PERIOD_S
  *
  * Brak polaczenia dluzej niz OFFLINE_RESTART_S => zapis licznika i restart.
+ *
+ * Tryb bateryjny (okres raportowania > 0 s, ustawiany w portalu; tylko ESP32-C6):
+ *   impulsy liczy rdzen LP (energy_meter/lp_core/main.c), a rdzen HP spi w deep sleep i co okres:
+ *   odczytuje licznik LP --> WiFi + MQTT --> raport --> deep sleep.
  */
 #include <cstdio>
 #include <memory>
 #include <string>
 
+#include <sys/time.h>
+
 #include "driver/gpio.h"
+#include "esp_attr.h"
 #include "esp_log.h"
+#include "esp_sleep.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -24,6 +32,7 @@
 #include "configuration/Configuration.hpp"
 #include "energy_meter/consumption_history.hpp"
 #include "energy_meter/energy_meter.hpp"
+#include "energy_meter/lp_counter.hpp"
 #include "mqtt/mqtt.hpp"
 #include "storage/storage.hpp"
 #include "wifi_manager.h"
@@ -95,11 +104,25 @@ static void handle_message(Mqtt &mqtt, const std::string &subtopic, const std::s
     mqtt.publish("set", "", 1, true); // czyscimy retained, zeby nie ustawiac licznika przy kazdym polaczeniu
 }
 
-static bool report(Mqtt &mqtt, const DeviceConfig &cfg)
+// Stan licznika do raportu - wspolny dla trybu sieciowego (EnergyMeter) i bateryjnego (rdzen LP).
+struct MeterSnapshot
+{
+    uint32_t pulses;
+    double power_w; // ujemna = nieznana
+    uint32_t last_pulse_width_ms;
+    uint32_t rejected;
+};
+
+static MeterSnapshot mains_snapshot()
 {
     EnergyMeter &meter = EnergyMeter::instance();
-    const uint32_t imp = meter.imp_per_kwh();
-    const uint32_t pulses = meter.pulses();
+    return {meter.pulses(), meter.power_w(), meter.last_pulse_width_ms(), meter.rejected()};
+}
+
+static bool report(Mqtt &mqtt, const DeviceConfig &cfg, const MeterSnapshot &meter)
+{
+    const uint32_t imp = Configuration::imp_per_kwh(cfg);
+    const uint32_t pulses = meter.pulses;
     bool ok = true;
 
     auto pub = [&](const char *topic, const std::string &value) { ok = mqtt.publish(topic, value, 0, true) && ok; };
@@ -111,7 +134,7 @@ static bool report(Mqtt &mqtt, const DeviceConfig &cfg)
     pub("pulses", std::to_string(pulses));
 
     // Chwilowa moc [W] (ujemna = jeszcze nieznana).
-    const double power = meter.power_w();
+    const double power = meter.power_w;
     char buf[24];
     if (power >= 0.0)
     {
@@ -148,8 +171,8 @@ static bool report(Mqtt &mqtt, const DeviceConfig &cfg)
     }
 
     // Diagnostyka czujnika.
-    pub("pulse_width_ms", std::to_string(meter.last_pulse_width_ms()));
-    pub("rejected_flashes", std::to_string(meter.rejected()));
+    pub("pulse_width_ms", std::to_string(meter.last_pulse_width_ms));
+    pub("rejected_flashes", std::to_string(meter.rejected));
 
     ESP_LOGI(TAG, "Raport: %s kWh, moc %.0f W, 24h %s kWh, %s", kwh.c_str(), power,
              EnergyMeter::format_kwh(pulses_24h, imp).c_str(), ok ? "OK" : "BLAD");
@@ -187,7 +210,7 @@ static void run_online(const DeviceConfig &cfg)
             if (s_report_now || now - last_report >= REPORT_PERIOD_S)
             {
                 s_report_now = false;
-                report(*mqtt, cfg);
+                report(*mqtt, cfg, mains_snapshot());
                 last_report = now;
             }
         }
@@ -221,11 +244,174 @@ static void run_online(const DeviceConfig &cfg)
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Tryb bateryjny: impulsy liczy rdzen LP, HP budzi sie co okres, wysyla raport i zasypia.
+// ---------------------------------------------------------------------------------------------
+
+static constexpr int BATTERY_WIFI_TIMEOUT_MS = 10000;  // krocej niz w trybie sieciowym - kazda sekunda radia to prad
+static constexpr int BATTERY_MQTT_TIMEOUT_MS = 8000;
+static constexpr int BATTERY_FLUSH_TIMEOUT_MS = 4000;
+static constexpr int64_t BATTERY_MIN_SLEEP_US = 1000000;
+static constexpr uint32_t BATTERY_MAGIC = 0x42415431; // "BAT1"
+
+// Stan licznika miedzy wybudzeniami (pamiec RTC przezywa deep sleep).
+struct BatteryState
+{
+    uint32_t magic;
+    uint32_t total_pulses;   // stan licznika energii [impulsy]: z NVS przy zimnym starcie, potem pamiec RTC
+    uint32_t last_lp_count;  // odczyt licznika LP przy poprzednim wybudzeniu
+    int64_t last_wake_us;    // czas poprzedniego odczytu (zegar systemowy, dziala przez deep sleep)
+    bool have_last;
+};
+RTC_DATA_ATTR static BatteryState s_bat = {};
+
+// Komenda "set" doszla do urzadzenia podczas jednego okna polaczenia - raport trzeba powtorzyc z nowa wartoscia.
+static volatile bool s_bat_report_again = false;
+
+static int64_t wall_us()
+{
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    return (int64_t)tv.tv_sec * 1000000 + tv.tv_usec;
+}
+
+// Komenda "<main_topic>/set" (stan licznika w kWh). Retained jest dostarczana zaraz po polaczeniu, wiec
+// zadziala w tym samym wybudzeniu, a najpozniej w nastepnym.
+static void handle_battery_message(Mqtt &mqtt, uint32_t imp, const std::string &subtopic, const std::string &payload)
+{
+    if (subtopic != "set")
+        return;
+
+    uint32_t pulses = 0;
+    if (EnergyMeter::parse_kwh(payload, imp, pulses))
+    {
+        s_bat.total_pulses = pulses;
+        s_bat.last_lp_count = LpCounter::count(); // kolejne impulsy beda doliczane od tego momentu
+        Storage::GetInstance()->save_pulses(pulses);
+        s_bat_report_again = true;
+    }
+    else
+    {
+        ESP_LOGW(TAG, "Nieprawidlowa wartosc licznika: '%s'", payload.c_str());
+    }
+    mqtt.publish("set", "", 1, true); // czyscimy retained, zeby nie ustawiac licznika przy kazdym polaczeniu
+}
+
+static MeterSnapshot battery_snapshot(double power_w)
+{
+    return {s_bat.total_pulses, power_w, LpCounter::last_width_ms(), LpCounter::rejected()};
+}
+
+static void run_battery(const DeviceConfig &cfg, uint32_t period_s)
+{
+    const uint32_t imp = Configuration::imp_per_kwh(cfg);
+    const bool lp_fresh = LpCounter::start(); // przy wybudzeniu z deep sleep rdzen LP juz liczy
+
+    if (lp_fresh || s_bat.magic != BATTERY_MAGIC)
+    {
+        // Zimny start (zasilanie / reset): stan licznika z NVS, licznik LP liczy od zera.
+        uint32_t saved = 0;
+        Storage::GetInstance()->read_pulses(saved);
+        s_bat = {};
+        s_bat.magic = BATTERY_MAGIC;
+        s_bat.total_pulses = saved;
+        s_bat.last_lp_count = LpCounter::count();
+    }
+
+    // Impulsy zliczone przez rdzen LP od poprzedniego wybudzenia.
+    const int64_t now_us = wall_us();
+    const uint32_t lp = LpCounter::count();
+    const uint32_t delta = lp - s_bat.last_lp_count; // arytmetyka bez znaku znosi zawiniecie licznika
+    s_bat.last_lp_count = lp;
+    s_bat.total_pulses += delta;
+
+    // Moc srednia z calego okna miedzy odczytami (a nie z odstepu dwoch ostatnich impulsow, jak w trybie sieciowym -
+    // przy raporcie co minuty/godzine pojedynczy odstep nic nie mowi o sredniej). Nieznana po zimnym starcie.
+    double power_w = -1.0;
+    if (s_bat.have_last && now_us > s_bat.last_wake_us)
+        power_w = (double)delta * 3.6e12 / ((double)imp * (double)(now_us - s_bat.last_wake_us));
+    s_bat.last_wake_us = now_us;
+    s_bat.have_last = true;
+
+    if (delta > 0)
+    {
+        ConsumptionHistory::record(delta);
+        Storage::GetInstance()->save_pulses(s_bat.total_pulses); // przed WiFi: zasilanie moze zniknac w kazdej chwili
+    }
+    ESP_LOGI(TAG, "Wybudzenie: +%lu imp, razem %lu, moc %.0f W", (unsigned long)delta,
+             (unsigned long)s_bat.total_pulses, power_w);
+
+    if (cfg.wifi_ssid.empty() || cfg.main_topic.empty())
+    {
+        ESP_LOGW(TAG, "Brak WiFi lub tokenu - tylko liczenie impulsow (konfiguracja: zwarcie D8-GND i reset)");
+    }
+    else if (wifi_manager_connect_sta(cfg.wifi_ssid.c_str(), cfg.wifi_pass.c_str(), BATTERY_WIFI_TIMEOUT_MS))
+    {
+        Mqtt mqtt(cfg);
+        mqtt.on_message([&mqtt, imp](const std::string &sub, const std::string &payload)
+                        { handle_battery_message(mqtt, imp, sub, payload); });
+
+        if (mqtt.start() && mqtt.wait_connected(BATTERY_MQTT_TIMEOUT_MS))
+        {
+            report(mqtt, cfg, battery_snapshot(power_w));
+            mqtt.wait_flushed(BATTERY_FLUSH_TIMEOUT_MS);
+
+            if (s_bat_report_again)
+            {
+                s_bat_report_again = false;
+                report(mqtt, cfg, battery_snapshot(power_w));
+                mqtt.wait_flushed(BATTERY_FLUSH_TIMEOUT_MS);
+            }
+        }
+        else
+        {
+            ESP_LOGW(TAG, "Brak polaczenia z brokerem - raport pominiety, impulsy zostaja w liczniku");
+        }
+        mqtt.stop();
+    }
+    wifi_manager_stop();
+
+    // Nastepne wybudzenie liczone od poprzedniego odczytu, wiec czas pracy radia nie wydluza okresu.
+    int64_t sleep_us = s_bat.last_wake_us + (int64_t)period_s * 1000000 - wall_us();
+    if (sleep_us < BATTERY_MIN_SLEEP_US)
+        sleep_us = BATTERY_MIN_SLEEP_US;
+
+    ESP_LOGI(TAG, "Deep sleep na %lld s", (long long)(sleep_us / 1000000));
+    ESP_ERROR_CHECK(esp_sleep_enable_timer_wakeup((uint64_t)sleep_us));
+    ESP_ERROR_CHECK(esp_sleep_enable_ulp_wakeup()); // utrzymuje domene RTC (rdzen LP) wlaczona w deep sleep
+    esp_deep_sleep_start();
+}
+
+static void run_battery_mode(const DeviceConfig &cfg, uint32_t period_s)
+{
+    // Konfiguracja: zwarcie D8-GND i reset/zasilanie. Przy wybudzeniach z deep sleep nie sprawdzamy zworki (prad).
+    if (esp_reset_reason() != ESP_RST_DEEPSLEEP && config_jumper_closed())
+    {
+        ESP_LOGW(TAG, "D8 zwarte z GND - tryb konfiguracji (siec '%s')", config_defaults::AP_SSID);
+        LpCounter::stop(); // pin impulsow wraca do zwyklego GPIO - zliczaniem w portalu zajmuje sie EnergyMeter
+        EnergyMeter::instance().start(Configuration::imp_per_kwh(cfg)); // portal pokazuje/ustawia stan licznika
+        ConfigPortal::run(config_defaults::CONFIG_MODE_TIMEOUT_S);       // po zapisaniu ustawien restartuje urzadzenie
+        esp_restart(); // czysty start: pin impulsow wraca do rdzenia LP
+    }
+
+    run_battery(cfg, period_s);
+}
+
 extern "C" void app_main(void)
 {
     Storage::GetInstance(); // inicjalizuje NVS
 
     DeviceConfig cfg = Configuration::load();
+
+    const uint32_t period_s = Configuration::report_period_s(cfg);
+    if (period_s > 0)
+    {
+        run_battery_mode(cfg, period_s);
+        return;
+    }
+
+    LpCounter::stop(); // po przelaczeniu z trybu bateryjnego rdzen LP moglby jeszcze liczyc na tym samym pinie
+
     EnergyMeter::instance().start(Configuration::imp_per_kwh(cfg)); // liczenie impulsow dziala od teraz
 
     if (config_jumper_closed())

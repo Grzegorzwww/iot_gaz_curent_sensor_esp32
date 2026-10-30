@@ -14,6 +14,7 @@ static const char *KEY_TOKEN = "token";
 static const char *KEY_PULSES = "pulses";
 static const char *KEY_PRICE = "price";
 static const char *KEY_IMP = "imp_kwh";
+static const char *KEY_PERIOD = "period_s";
 
 Storage::Storage()
 {
@@ -96,6 +97,9 @@ esp_err_t Storage::read_price(std::string &price) { return get_str(KEY_PRICE, pr
 
 esp_err_t Storage::save_imp_per_kwh(const std::string &imp) { return set_str(KEY_IMP, imp); }
 esp_err_t Storage::read_imp_per_kwh(std::string &imp) { return get_str(KEY_IMP, imp); }
+
+esp_err_t Storage::save_report_period(const std::string &period) { return set_str(KEY_PERIOD, period); }
+esp_err_t Storage::read_report_period(std::string &period) { return get_str(KEY_PERIOD, period); }
 
 esp_err_t Storage::save_pulses(uint32_t pulses)
 {

@@ -129,9 +129,9 @@ static std::string build_page(const std::string &message)
         "p.sub{margin:0 0 1.2em;color:var(--muted);font-size:.9em}"
         "label{display:block;margin-top:1.1em;font-weight:600;font-size:.78em;color:var(--muted);"
         "text-transform:uppercase;letter-spacing:.04em}"
-        "input{width:100%;padding:.6em .7em;margin-top:.35em;border:1px solid var(--border);"
+        "input,select{width:100%;padding:.6em .7em;margin-top:.35em;border:1px solid var(--border);"
         "border-radius:9px;font-size:1em;background:#fff;color:var(--text);font-family:inherit}"
-        "input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.15)}"
+        "input:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.15)}"
         "button{margin-top:1.2em;padding:.7em 1.2em;border:none;border-radius:9px;font-size:.95em;"
         "font-weight:600;cursor:pointer;background:var(--accent);color:#fff;transition:background .15s}"
         "button:hover{background:var(--accent-dark)}"
@@ -148,12 +148,12 @@ static std::string build_page(const std::string &message)
         page += "<p><b>" + html_escape(message) + "</b></p>";
 
     page += "<form method=\"post\" action=\"/save\">";
-    page += "<label>WiFi SSID<input list=\"ssid_list\" id=\"ssid\" name=\"ssid\" type=\"text\" maxlength=\"" +
+    page += "<label>WiFi SSID<input id=\"ssid\" name=\"ssid\" type=\"text\" maxlength=\"" +
             std::to_string(MAX_SSID) + "\" value=\"" + html_escape(cur.wifi_ssid) + "\" placeholder=\"" +
             html_escape(def.wifi_ssid) + "\" autocomplete=\"off\"></label>"
-            "<datalist id=\"ssid_list\"></datalist>"
+            "<select id=\"ssid_sel\" style=\"display:none\" onchange=\"pickSsid()\"></select>"
             "<button type=\"button\" class=\"secondary\" onclick=\"scanWifi()\">Skanuj sieci</button>"
-            "<small id=\"wifi_status\"></small>";
+            "<small id=\"wifi_status\">Wybierz sie\xc4\x87 z listy po skanowaniu albo wpisz nazw\xc4\x99 r\xc4\x99" "cznie.</small>";
     page += input_field("WiFi has\xc5\x82o", "wpass", "", "(bez zmian)", MAX_WIFI_PASS, true);
     page += input_field("MQTT broker (URI)", "broker", cur.mqtt_broker, def.mqtt_broker, MAX_FIELD, false);
 
@@ -176,6 +176,36 @@ static std::string build_page(const std::string &message)
     page += "<input type=\"hidden\" name=\"meter_orig\" value=\"" + html_escape(meter) + "\">";
     page += input_field("Impulsy diody na 1 kWh", "imp", cur.imp_per_kwh, def.imp_per_kwh, 6, false);
     page += input_field("Cena za 1 kWh [z\xc5\x82]", "price", cur.energy_price, "np. 1,10 (puste = bez koszt\xc3\xb3w)", 8, false);
+
+    // Strategia wysylania danych: zasilanie sieciowe (polaczenie stale) albo bateria (deep sleep + raport co okres).
+    // Wartosc pola to okres w sekundach; szacunek czasu pracy liczy skrypt w przegladarce (funkcja est()).
+    const std::string period_sel = cur.report_period.empty() ? def.report_period : cur.report_period;
+    struct PeriodOption
+    {
+        const char *value;
+        const char *label;
+    };
+    static const PeriodOption period_options[] = {
+        {"0", "Zasilanie sieciowe: po&#322;&#261;czenie sta&#322;e (domy&#347;lnie)"},
+        {"60", "Bateria: raport co 1 minut&#281;"},
+        {"180", "Bateria: raport co 3 minuty"},
+        {"300", "Bateria: raport co 5 minut"},
+        {"600", "Bateria: raport co 10 minut"},
+        {"3600", "Bateria: raport co 1 godzin&#281;"},
+    };
+    page += "<label>Strategia wysy&#322;ania danych<select id=\"period\" name=\"period\" onchange=\"est()\">";
+    for (const PeriodOption &o : period_options)
+    {
+        page += std::string("<option value=\"") + o.value + "\"" + (period_sel == o.value ? " selected" : "") + ">" +
+                o.label + "</option>";
+    }
+    page += "</select></label>"
+            "<label>Pojemno&#347;&#263; ogniwa [mAh] (tylko do szacunku)"
+            "<input id=\"cap\" type=\"number\" min=\"10\" max=\"20000\" step=\"10\" value=\"250\" oninput=\"est()\"></label>"
+            "<small id=\"est\" style=\"font-weight:600;color:var(--text)\"></small>"
+            "<small>Szacunek zak&#322;ada ok. 0,2 mAh na jeden raport (WiFi + MQTT) i 0,1 mA w u&#347;pieniu, "
+            "z 80% pojemno&#347;ci ogniwa. Rzeczywisty czas zale&#380;y od zasi&#281;gu WiFi i uk&#322;adu zasilania. "
+            "W trybie bateryjnym wej&#347;cie w t&#281; konfiguracj&#281; wymaga zwarcia D8 z GND i resetu p&#322;ytki.</small>";
     page += "<p><small>Puste pole = warto\xc5\x9b\xc4\x87 domy\xc5\x9blna (widoczna jako podpowied\xc5\xba).</small></p>"
             "<button type=\"submit\" name=\"action\" value=\"save\">Ustaw</button> "
             "<button type=\"submit\" name=\"action\" value=\"reset\" class=\"secondary\">Przywr\xc3\xb3" "\xc4\x87 domy\xc5\x9blne</button>"
@@ -213,13 +243,39 @@ static std::string build_page(const std::string &message)
             "var st=document.getElementById('wifi_status');"
             "st.textContent='Skanowanie sieci...';"
             "fetch('/wifi_scan').then(function(r){return r.json();}).then(function(list){"
-            "var dl=document.getElementById('ssid_list');"
-            "dl.innerHTML='';"
-            "list.forEach(function(ssid){var o=document.createElement('option');o.value=ssid;dl.appendChild(o);});"
-            "st.textContent=list.length?('Znaleziono '+list.length+' sieci.'):'Brak wynikow w poblizu.';"
-            "}).catch(function(){st.textContent='Blad skanowania sieci.';});"
+            "var sel=document.getElementById('ssid_sel');"
+            "var cur=document.getElementById('ssid').value;"
+            "sel.innerHTML='';"
+            "var p=document.createElement('option');p.value='';p.textContent='-- wybierz sie\\u0107 z listy --';sel.appendChild(p);"
+            "list.forEach(function(ssid){var o=document.createElement('option');o.value=ssid;o.textContent=ssid;"
+            "if(ssid===cur)o.selected=true;sel.appendChild(o);});"
+            "var c=document.createElement('option');c.value='\\u0001';c.textContent='Inna (wpisz r\\u0119cznie)...';sel.appendChild(c);"
+            "sel.style.display='block';"
+            "st.textContent=list.length?('Znaleziono '+list.length+' sieci. Wybierz z listy lub wpisz r\\u0119cznie.'):"
+            "'Brak wynik\\u00f3w w pobli\\u017cu. Wpisz nazw\\u0119 r\\u0119cznie.';"
+            "}).catch(function(){st.textContent='B\\u0142\\u0105d skanowania sieci. Wpisz nazw\\u0119 r\\u0119cznie.';});"
+            "}"
+            "function pickSsid(){"
+            "var sel=document.getElementById('ssid_sel');var inp=document.getElementById('ssid');"
+            "if(sel.value==='\\u0001'){inp.value='';inp.focus();}"
+            "else if(sel.value){inp.value=sel.value;}"
             "}"
             "window.addEventListener('load',scanWifi);"
+            // Szacowany czas pracy na jednym naladowaniu: Iavg = Qraport*3600/T + Isleep [mA], t = 0.8*C/Iavg.
+            // Zasilanie sieciowe (T=0): urzadzenie trzyma WiFi caly czas, ok. 80 mA.
+            "function est(){"
+            "var T=+document.getElementById('period').value;"
+            "var C=+document.getElementById('cap').value;"
+            "var el=document.getElementById('est');"
+            "if(!(C>0)){el.textContent='';return;}"
+            "var I=T===0?80:0.2*3600/T+0.1;"
+            "var h=0.8*C/I;"
+            "var s=h<48?(Math.round(h*10)/10+' h'):(Math.round(h/24*10)/10+' dni');"
+            "el.textContent=T===0?"
+            "('To tryb dla zasilania sieciowego. Z ogniwa po\\u0142\\u0105czenie sta\\u0142e wystarczy\\u0142oby na ok. '+s+'.'):"
+            "('Szacowany czas pracy na jednym na\\u0142adowaniu: ok. '+s+'.');"
+            "}"
+            "window.addEventListener('load',est);"
             "</script>"
             "</body></html>";
     return page;
@@ -286,6 +342,7 @@ static esp_err_t save_post_handler(httpd_req_t *req)
     DeviceConfig cfg = Configuration::stored();
     if (action == "reset")
     {
+        cfg.report_period = form["period"];
         cfg = DeviceConfig{};
     }
     else
@@ -334,7 +391,14 @@ static esp_err_t save_post_handler(httpd_req_t *req)
     if (!cfg.imp_per_kwh.empty() && !Configuration::parse_imp_per_kwh(cfg.imp_per_kwh, imp_check))
     {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Nieprawidlowa liczba impulsow na kWh (1-100000)");
+     
+
+    uint32_t period_check = 0;
+    if (!cfg.report_period.empty() && !Configuration::parse_report_period(cfg.report_period, period_check))
+    {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Nieprawidlowa strategia wysylania danych");
         return ESP_FAIL;
+    }   return ESP_FAIL;
     }
 
     // Stan licznika [kWh] zostaje zachowany takze przy zmianie liczby impulsow na kWh

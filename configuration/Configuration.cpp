@@ -15,6 +15,7 @@ DeviceConfig Configuration::defaults()
     cfg.main_topic = build_topic(cfg.token);
     cfg.imp_per_kwh = config_defaults::IMP_PER_KWH;
     cfg.energy_price = config_defaults::ENERGY_PRICE;
+    cfg.report_period = config_defaults::REPORT_PERIOD;
     return cfg;
 }
 
@@ -30,6 +31,7 @@ DeviceConfig Configuration::stored()
     cfg.main_topic = build_topic(cfg.token);
     storage->read_imp_per_kwh(cfg.imp_per_kwh);
     storage->read_price(cfg.energy_price);
+    storage->read_report_period(cfg.report_period);
     return cfg;
 }
 
@@ -57,6 +59,8 @@ DeviceConfig Configuration::load()
         cfg.imp_per_kwh = def.imp_per_kwh;
     if (cfg.energy_price.empty())
         cfg.energy_price = def.energy_price;
+    if (cfg.report_period.empty())
+        cfg.report_period = def.report_period;
     return cfg;
 }
 
@@ -69,7 +73,8 @@ esp_err_t Configuration::save(const DeviceConfig &cfg)
         storage->save_pass(cfg.mqtt_pass) == ESP_OK &&
         storage->save_token(cfg.token) == ESP_OK &&
         storage->save_imp_per_kwh(cfg.imp_per_kwh) == ESP_OK &&
-        storage->save_price(cfg.energy_price) == ESP_OK)
+        storage->save_price(cfg.energy_price) == ESP_OK &&
+        storage->save_report_period(cfg.report_period) == ESP_OK)
     {
         return ESP_OK;
     }
@@ -113,6 +118,27 @@ uint32_t Configuration::imp_per_kwh(const DeviceConfig &cfg)
     if (!parse_imp_per_kwh(cfg.imp_per_kwh, imp))
         parse_imp_per_kwh(config_defaults::IMP_PER_KWH, imp);
     return imp;
+}
+
+bool Configuration::parse_report_period(const std::string &text, uint32_t &period_s)
+{
+    char *end = nullptr;
+    const unsigned long v = strtoul(text.c_str(), &end, 10);
+    if (text.empty() || end == text.c_str() || *end != '\0')
+        return false;
+    if (v != 0 && v != 60 && v != 180 && v != 300 && v != 600 && v != 3600)
+        return false;
+
+    period_s = (uint32_t)v;
+    return true;
+}
+
+uint32_t Configuration::report_period_s(const DeviceConfig &cfg)
+{
+    uint32_t period = 0;
+    if (!parse_report_period(cfg.report_period, period))
+        parse_report_period(config_defaults::REPORT_PERIOD, period);
+    return period;
 }
 
 bool Configuration::valid_token(const std::string &token)
