@@ -13,8 +13,6 @@ DeviceConfig Configuration::defaults()
     cfg.mqtt_pass = config_defaults::MQTT_PASS;
     cfg.token = config_defaults::TOKEN;
     cfg.main_topic = build_topic(cfg.token);
-    cfg.imp_per_kwh = config_defaults::IMP_PER_KWH;
-    cfg.energy_price = config_defaults::ENERGY_PRICE;
     cfg.report_period = config_defaults::REPORT_PERIOD;
     return cfg;
 }
@@ -29,8 +27,6 @@ DeviceConfig Configuration::stored()
     storage->read_pass(cfg.mqtt_pass);
     storage->read_token(cfg.token);
     cfg.main_topic = build_topic(cfg.token);
-    storage->read_imp_per_kwh(cfg.imp_per_kwh);
-    storage->read_price(cfg.energy_price);
     storage->read_report_period(cfg.report_period);
     return cfg;
 }
@@ -55,10 +51,6 @@ DeviceConfig Configuration::load()
     if (cfg.token.empty())
         cfg.token = def.token;
     cfg.main_topic = build_topic(cfg.token);
-    if (cfg.imp_per_kwh.empty())
-        cfg.imp_per_kwh = def.imp_per_kwh;
-    if (cfg.energy_price.empty())
-        cfg.energy_price = def.energy_price;
     if (cfg.report_period.empty())
         cfg.report_period = def.report_period;
     return cfg;
@@ -72,52 +64,11 @@ esp_err_t Configuration::save(const DeviceConfig &cfg)
         storage->save_login(cfg.mqtt_login) == ESP_OK &&
         storage->save_pass(cfg.mqtt_pass) == ESP_OK &&
         storage->save_token(cfg.token) == ESP_OK &&
-        storage->save_imp_per_kwh(cfg.imp_per_kwh) == ESP_OK &&
-        storage->save_price(cfg.energy_price) == ESP_OK &&
         storage->save_report_period(cfg.report_period) == ESP_OK)
     {
         return ESP_OK;
     }
     return ESP_FAIL;
-}
-
-bool Configuration::parse_price(const std::string &text, double &price)
-{
-    std::string t = text;
-    for (char &c : t)
-        if (c == ',')
-            c = '.';
-
-    char *end = nullptr;
-    const double v = strtod(t.c_str(), &end);
-    while (end && (*end == ' ' || *end == '\r' || *end == '\n'))
-        ++end;
-    if (t.empty() || end == t.c_str() || *end != '\0' || !(v > 0.0) || v > 1000.0)
-        return false;
-
-    price = v;
-    return true;
-}
-
-bool Configuration::parse_imp_per_kwh(const std::string &text, uint32_t &imp)
-{
-    char *end = nullptr;
-    const unsigned long v = strtoul(text.c_str(), &end, 10);
-    while (end && (*end == ' ' || *end == '\r' || *end == '\n'))
-        ++end;
-    if (text.empty() || end == text.c_str() || *end != '\0' || v < 1 || v > 100000)
-        return false;
-
-    imp = (uint32_t)v;
-    return true;
-}
-
-uint32_t Configuration::imp_per_kwh(const DeviceConfig &cfg)
-{
-    uint32_t imp = 0;
-    if (!parse_imp_per_kwh(cfg.imp_per_kwh, imp))
-        parse_imp_per_kwh(config_defaults::IMP_PER_KWH, imp);
-    return imp;
 }
 
 bool Configuration::parse_report_period(const std::string &text, uint32_t &period_s)
@@ -126,7 +77,7 @@ bool Configuration::parse_report_period(const std::string &text, uint32_t &perio
     const unsigned long v = strtoul(text.c_str(), &end, 10);
     if (text.empty() || end == text.c_str() || *end != '\0')
         return false;
-    if (v != 0 && v != 60 && v != 180 && v != 300 && v != 600 && v != 3600)
+    if (v != 0 && v != 60 && v != 180 && v != 300 && v != 600 && v != 1800 && v != 3600)
         return false;
 
     period_s = (uint32_t)v;

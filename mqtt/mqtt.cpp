@@ -88,27 +88,12 @@ void Mqtt::event_handler(void *handler_args, esp_event_base_t, int32_t event_id,
     case MQTT_EVENT_CONNECTED:
         ESP_LOGI(TAG, "Connected to broker");
         self->connected_ = true;
-        esp_mqtt_client_subscribe(self->client_, (self->main_topic_ + "/set").c_str(), 0);
         break;
 
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGW(TAG, "Disconnected from broker");
         self->connected_ = false;
         break;
-
-    case MQTT_EVENT_DATA:
-    {
-        ESP_LOGI(TAG, "TOPIC=%.*s DATA=%.*s", event->topic_len, event->topic, event->data_len, event->data);
-        // Tylko kompletne wiadomosci, bez pustych (czyszczenie retained).
-        if (!self->handler_ || event->data_len == 0 || event->data_len != event->total_data_len ||
-            event->topic_len == 0)
-            break;
-        const std::string topic(event->topic, event->topic_len);
-        const std::string prefix = self->main_topic_ + "/";
-        if (topic.compare(0, prefix.size(), prefix) == 0)
-            self->handler_(topic.substr(prefix.size()), std::string(event->data, event->data_len));
-        break;
-    }
 
     case MQTT_EVENT_ERROR:
         ESP_LOGE(TAG, "MQTT_EVENT_ERROR");
